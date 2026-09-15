@@ -1,7 +1,18 @@
 const path = require('path');
+const fs = require('fs');
+// 本機開發時,如果有 server/.env 就讀入嚟(例如 DATABASE_URL 指去 Render 嗰個 Postgres);
+// 正式環境(Render)嘅環境變數由 Render 自己注入,唔靠呢個檔案
+const envPath = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const m = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+}
+
 const express = require('express');
 const cookieParser = require('cookie-parser');
-require('./db'); // 初始化 DB + migration + seed admin
+const db = require('./db');
 
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
@@ -31,6 +42,15 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Attendance server listening on http://localhost:${PORT}`);
+
+async function main() {
+  await db.init(); // 建立 schema(如果未有) + seed 預設管理員,要等呢個做完先開始收 request
+  app.listen(PORT, () => {
+    console.log(`Attendance server listening on http://localhost:${PORT}`);
+  });
+}
+
+main().catch((err) => {
+  console.error('伺服器啟動失敗:', err);
+  process.exit(1);
 });

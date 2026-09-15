@@ -1,15 +1,15 @@
 const db = require('../db');
 
 // 收集某個 class_subject 嘅所有資料,組合成 buildClassExportWorkbook 需要嘅格式
-function gatherClassExportData(classSubject) {
-  const cls = db.prepare('SELECT * FROM classes WHERE id = ?').get(classSubject.class_id);
-  const subject = db.prepare('SELECT * FROM subjects WHERE id = ?').get(classSubject.subject_id);
-  const students = db
+async function gatherClassExportData(classSubject) {
+  const cls = await db.prepare('SELECT * FROM classes WHERE id = ?').get(classSubject.class_id);
+  const subject = await db.prepare('SELECT * FROM subjects WHERE id = ?').get(classSubject.subject_id);
+  const studentRows = await db
     .prepare('SELECT * FROM students WHERE class_id = ? AND active = 1 ORDER BY seat_no')
-    .all(classSubject.class_id)
-    .map((s) => ({ id: s.id, seatNo: s.seat_no, name: s.name }));
+    .all(classSubject.class_id);
+  const students = studentRows.map((s) => ({ id: s.id, seatNo: s.seat_no, name: s.name }));
 
-  const attendanceRows = db
+  const attendanceRows = await db
     .prepare(
       `SELECT ls.date AS date, ar.student_id AS student_id, ar.score AS score
        FROM attendance_records ar
@@ -18,11 +18,11 @@ function gatherClassExportData(classSubject) {
     )
     .all(classSubject.id);
 
-  const performanceRows = db
+  const performanceRows = await db
     .prepare('SELECT date, student_id, score FROM performance_scores WHERE class_subject_id = ?')
     .all(classSubject.id);
 
-  const lessonScoreRows = db
+  const lessonScoreRows = await db
     .prepare('SELECT date, student_id, score FROM lesson_scores WHERE class_subject_id = ?')
     .all(classSubject.id);
 
@@ -43,12 +43,13 @@ function gatherClassExportData(classSubject) {
     return map;
   };
 
-  const testsRaw = db.prepare('SELECT * FROM tests WHERE class_subject_id = ? ORDER BY date, id').all(classSubject.id);
-  const tests = testsRaw.map((t) => {
-    const scoreRows = db.prepare('SELECT student_id, score FROM test_scores WHERE test_id = ?').all(t.id);
+  const testsRaw = await db.prepare('SELECT * FROM tests WHERE class_subject_id = ? ORDER BY date, id').all(classSubject.id);
+  const tests = [];
+  for (const t of testsRaw) {
+    const scoreRows = await db.prepare('SELECT student_id, score FROM test_scores WHERE test_id = ?').all(t.id);
     const scores = new Map(scoreRows.map((r) => [r.student_id, r.score]));
-    return { id: t.id, name: t.name, date: t.date, scores };
-  });
+    tests.push({ id: t.id, name: t.name, date: t.date, scores });
+  }
 
   return {
     className: cls?.name || '',

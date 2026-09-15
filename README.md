@@ -1,11 +1,11 @@
 # 課堂點名及評分系統
 
-Vue3 + Express + SQLite(Node 內建 `node:sqlite`)嘅課堂點名 / 評分 / 大測登記系統。
+Vue3 + Express + PostgreSQL 嘅課堂點名 / 評分 / 大測登記系統。
 
 ## 目錄結構
 
 ```
-server/   後端 (Express + node:sqlite + exceljs)
+server/   後端 (Express + pg + exceljs)
 client/   前端 (Vue3 + Vite)
 ```
 
@@ -16,7 +16,20 @@ cd server && npm install
 cd ../client && npm install
 ```
 
-> 資料庫用 Node.js 內建嘅 `node:sqlite` 模組(Node 22.5+ 已內建,毋須額外安裝/編譯原生模組),所以需要 **Node.js 22.5 或以上版本**(建議用最新 LTS)。無需安裝 Visual Studio Build Tools。
+## 資料庫 (PostgreSQL)
+
+呢個系統用 PostgreSQL,需要一個 `DATABASE_URL` 連線字串(格式 `postgres://user:password@host:port/dbname`)。
+Schema 會喺 server 啟動嗰陣自動建立(`CREATE TABLE IF NOT EXISTS`),唔使自己手動 migrate。
+
+**本機開發**:喺 `server/` 底下建立一個 `.env` 檔案(唔會被 git 追蹤),入面寫:
+
+```
+DATABASE_URL=postgres://...你嘅連線字串...
+```
+
+如果冇本機 Postgres,可以直接用 Render 嗰個 Postgres 嘅 **External Connection String**(喺 Render Dashboard 嗰個 Postgres 頁面攞到),本機同正式環境共用同一個資料庫。
+
+**正式環境 (Render)**:專案根目錄嘅 `render.yaml` 已經定義咗一個 Postgres(`attendance-db`)同一個 web service,並且自動將 `DATABASE_URL` 接駁埋一齊 —— 喺 Render 用「New +」→「Blueprint」揀呢個 repo 就會自動建立晒,唔使手動設定環境變數。
 
 ## 開發模式運行
 
@@ -81,3 +94,4 @@ cd ../server && npm start    # Express 會自動 serve client/dist,單一 port (
 
 - `npm audit` 會顯示 client 嘅 `vite`/`esbuild` 同 server 嘅 `exceljs`(transitive `uuid`)有中等風險嘅漏洞,兩者都只影響開發階段/特定情境,對呢個內部工具風險低,如有需要可以自行執行 `npm audit fix --force`(注意會有 breaking change)。
 - 因為呢個環境冇瀏覽器自動化工具,前端 UI 已經過 `npm run build` 編譯檢查、同用 curl 完整測試過後端所有 API(登入、上傳花名冊、出席/表現分/堂課分/大測登記、事後編輯、Excel 匯出格式),但實際瀏覽器交互(㨂掣、表格顯示)建議你首次使用時手動行一次登入 → 出席登記 → 匯出流程做核對。
+- 資料庫由 `node:sqlite`(本機檔案)改用 PostgreSQL,原因係舊有嘅檔案式資料庫喺 Render 呢類雲端主機冇持久儲存,重新部署會清空。Postgres 版嘅所有 SQL(schema、transaction、ON CONFLICT upsert、JOIN、cascade delete)已經用一個嵌入式 Postgres 相容引擎(`@electric-sql/pglite`)做過完整測試,包括起服務器實際打晒登入/建班/上傳花名冊/出席/評分/測驗/匯出 Excel/刪除呢一輪 API,但未喺你實際嘅 Render Postgres 度驗證過,首次部署後建議行多一次呢個流程做核對。
