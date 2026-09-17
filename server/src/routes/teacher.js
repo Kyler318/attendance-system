@@ -171,6 +171,26 @@ function makeScoreEndpoints(table) {
 makeScoreEndpoints('performance_scores');
 makeScoreEndpoints('lesson_scores');
 
+// 刪除某一日嘅記錄(出席 + 表現分 + 堂課分 一齊刪,對應「今日課堂記錄」個合併畫面),不可還原
+router.delete(
+  '/class-subjects/:id/daily-record',
+  requireClassSubjectAccess,
+  h(async (req, res) => {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: '請提供日期' });
+    const tx = db.transaction(async () => {
+      const session = await db
+        .prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?')
+        .get(req.classSubject.id, date);
+      if (session) await db.prepare('DELETE FROM lesson_sessions WHERE id = ?').run(session.id); // cascade 埋 attendance_records
+      await db.prepare('DELETE FROM performance_scores WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
+      await db.prepare('DELETE FROM lesson_scores WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
+    });
+    await tx();
+    res.json({ ok: true });
+  })
+);
+
 // ---- 大測 ----
 router.get(
   '/class-subjects/:id/tests',

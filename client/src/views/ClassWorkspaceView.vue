@@ -194,6 +194,24 @@ async function saveDaily() {
   }
 }
 
+async function deleteDaily() {
+  dailyErr.value = '';
+  dailyMsg.value = '';
+  if (!confirm(`確定要刪除 ${dailyDate.value} 呢日嘅出席、表現分、堂課分記錄?呢個動作不可還原。`)) return;
+  dailySaving.value = true;
+  try {
+    await http.delete(`/teacher/class-subjects/${csId.value}/daily-record`, { params: { date: dailyDate.value } });
+    clearMap(attendanceStatus);
+    clearMap(performanceScores);
+    clearMap(lessonScores);
+    dailyMsg.value = `已刪除 ${dailyDate.value} 呢日嘅記錄`;
+  } catch (e) {
+    dailyErr.value = e.response?.data?.error || '刪除失敗,請重試';
+  } finally {
+    dailySaving.value = false;
+  }
+}
+
 // ---- 大測 ----
 const tests = ref([]);
 const testsLoading = ref(false);
@@ -308,6 +326,7 @@ onMounted(async () => {
           </select>
         </label>
         <div class="spacer" />
+        <button class="danger" :disabled="dailySaving || dailyLoading" @click="deleteDaily">刪除呢日記錄</button>
         <button class="primary" :disabled="dailySaving || dailyLoading" @click="saveDaily">
           {{ dailySaving ? '儲存中...' : '儲存全部記錄' }}
         </button>
