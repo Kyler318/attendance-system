@@ -43,7 +43,7 @@ function scoreOf(status) {
   return opt ? opt.score : null;
 }
 
-// 出席分為 0(缺席)嘅學生,表現分/堂課分都應該跟住為 0
+// 出席分為 0(缺席)嘅學生,表現分應該跟住為 0
 function isAbsent(studentId) {
   return scoreOf(attendanceStatus[studentId]) === 0;
 }
@@ -53,23 +53,37 @@ function hasAttendance(studentId) {
   return !!attendanceStatus[studentId];
 }
 
-// 表現分/堂課分揀嘅掣係咪要鎖住:未揀出席,或者已經係缺席
-function scoreLocked(studentId) {
+// 表現分揀嘅掣係咪要鎖住:未揀出席,或者已經係缺席
+function performanceLocked(studentId) {
   return !hasAttendance(studentId) || isAbsent(studentId);
+}
+
+function hasScore(map, studentId) {
+  return map[studentId] !== undefined && map[studentId] !== null && map[studentId] !== '';
+}
+
+// 呢日係咪有堂課:睇下有冇出席(冇缺席)嘅學生填咗堂課分。冇嘅話即係嗰日冇堂課,
+// 缺席學生唔使填 0;有嘅話先至代表嗰日有堂課,缺席學生冇做到,先鎖住/填 0
+const lessonActive = computed(() => roster.value.some((s) => !isAbsent(s.id) && hasScore(lessonScores, s.id)));
+
+// 堂課分揀嘅掣係咪要鎖住:未揀出席,或者(缺席 且 嗰日其他人有堂課)
+function lessonLocked(studentId) {
+  return !hasAttendance(studentId) || (isAbsent(studentId) && lessonActive.value);
 }
 
 function clearMap(map) {
   Object.keys(map).forEach((k) => delete map[k]);
 }
 
-// 出席狀態一改(包括套用全部出席),即刻將出席分為 0 嘅學生嘅表現分/堂課分都拉返做 0
+// 出席狀態一改(包括套用全部出席)、或者堂課分一改,即刻檢查:缺席嘅學生表現分固定拉做 0;
+// 堂課分就淨係喺「嗰日其他人有堂課」先拉做 0,如果嗰日冇人填堂課就唔會逼佢哋填 0
 watch(
-  attendanceStatus,
+  [attendanceStatus, lessonScores],
   () => {
     for (const s of roster.value) {
       if (isAbsent(s.id)) {
         performanceScores[s.id] = 0;
-        lessonScores[s.id] = 0;
+        if (lessonActive.value) lessonScores[s.id] = 0;
       }
     }
   },
@@ -378,8 +392,8 @@ onMounted(async () => {
                 <AttendanceStatusPicker v-model="attendanceStatus[s.id]" :options="attendanceStatusOptions" />
               </td>
               <td>{{ attendanceStatus[s.id] ? scoreOf(attendanceStatus[s.id]) : '-' }}</td>
-              <td><ScorePicker v-model="performanceScores[s.id]" :presets="meta.presetScores" :disabled="scoreLocked(s.id)" /></td>
-              <td><ScorePicker v-model="lessonScores[s.id]" :presets="meta.presetScores" :disabled="scoreLocked(s.id)" /></td>
+              <td><ScorePicker v-model="performanceScores[s.id]" :presets="meta.presetScores" :disabled="performanceLocked(s.id)" /></td>
+              <td><ScorePicker v-model="lessonScores[s.id]" :presets="meta.presetScores" :disabled="lessonLocked(s.id)" /></td>
             </tr>
           </tbody>
         </table>
