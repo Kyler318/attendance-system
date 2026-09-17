@@ -129,14 +129,15 @@ function applyBulkLesson() {
   }
 }
 
-// ---- 儲存 (三種分數獨立判斷:淨係填咗至少一個學生嘅先會檢查/儲存,完全冇填就當日冇呢類記錄) ----
-function buildCategoryPlan(map, label) {
+// ---- 儲存 (出席/表現分:淨係填咗至少一個學生嘅先會檢查/儲存,填咗就要成班填晒;
+//           堂課分:唔一定要填,得幾個學生有分都可以淨係儲存嗰幾個,唔使成班填晒) ----
+function buildCategoryPlan(map, label, { requireComplete = true } = {}) {
   const touched = roster.value.filter((s) => map[s.id] !== undefined && map[s.id] !== null && map[s.id] !== '');
-  if (touched.length === 0) return { skip: true };
-  if (touched.length !== roster.value.length) {
-    return { skip: false, error: `「${label}」仲有 ${roster.value.length - touched.length} 位學生未填` };
+  if (touched.length === 0) return { skip: true, touched };
+  if (requireComplete && touched.length !== roster.value.length) {
+    return { skip: false, error: `「${label}」仲有 ${roster.value.length - touched.length} 位學生未填`, touched };
   }
-  return { skip: false, error: null };
+  return { skip: false, error: null, touched };
 }
 
 async function saveDaily() {
@@ -145,7 +146,7 @@ async function saveDaily() {
 
   const attPlan = buildCategoryPlan(attendanceStatus, '出席狀態');
   const perfPlan = buildCategoryPlan(performanceScores, '表現分');
-  const lessonPlan = buildCategoryPlan(lessonScores, '堂課分');
+  const lessonPlan = buildCategoryPlan(lessonScores, '堂課分', { requireComplete: false });
 
   const errors = [attPlan, perfPlan, lessonPlan].filter((p) => p.error).map((p) => p.error);
   if (errors.length > 0) {
@@ -178,7 +179,7 @@ async function saveDaily() {
       );
     }
     if (!lessonPlan.skip) {
-      const records = roster.value.map((s) => ({ studentId: s.id, score: lessonScores[s.id] }));
+      const records = lessonPlan.touched.map((s) => ({ studentId: s.id, score: lessonScores[s.id] }));
       tasks.push(
         http
           .post(`/teacher/class-subjects/${csId.value}/lesson_scores`, { date: dailyDate.value, records })
