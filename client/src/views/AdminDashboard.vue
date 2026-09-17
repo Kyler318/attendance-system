@@ -133,6 +133,30 @@ async function deleteStudent(classId, student) {
   await loadClassStudents(classId);
 }
 
+// ---- 單獨新增學生 ----
+const newStudentName = reactive({});
+const newStudentSeatNo = reactive({});
+const addStudentErr = reactive({});
+async function addStudent(classId) {
+  addStudentErr[classId] = '';
+  const name = (newStudentName[classId] || '').trim();
+  if (!name) {
+    addStudentErr[classId] = '請輸入學生姓名';
+    return;
+  }
+  try {
+    await http.post(`/admin/classes/${classId}/students`, {
+      name,
+      seatNo: newStudentSeatNo[classId] || undefined,
+    });
+    newStudentName[classId] = '';
+    newStudentSeatNo[classId] = '';
+    await loadClassStudents(classId);
+  } catch (e) {
+    addStudentErr[classId] = e.response?.data?.error || '新增失敗';
+  }
+}
+
 // ---- 科目 ----
 const newSubjectName = ref('');
 const subjectErr = ref('');
@@ -312,11 +336,17 @@ async function loadRecords() {
                   <td colspan="6" style="text-align: left; background: #fafbfd">
                     <p v-if="classStudentsLoading" class="muted">載入緊...</p>
                     <p v-else-if="!classStudents[c.id] || classStudents[c.id].length === 0" class="muted">呢個班未有學生。</p>
-                    <div v-else class="row" style="flex-wrap: wrap; gap: 8px">
+                    <div v-else class="row" style="flex-wrap: wrap; gap: 8px; margin-bottom: 10px">
                       <span v-for="st in classStudents[c.id]" :key="st.id" class="badge ok" style="gap: 8px">
                         {{ st.seat_no }}. {{ st.name }}
                         <button class="ghost sm" style="padding: 0 2px" title="刪除學生" @click="deleteStudent(c.id, st)">✕</button>
                       </span>
+                    </div>
+                    <div class="row">
+                      <input v-model="newStudentName[c.id]" placeholder="新學生姓名" style="width: 140px" />
+                      <input v-model="newStudentSeatNo[c.id]" type="number" min="1" placeholder="學號(唔填自動排)" style="width: 130px" />
+                      <button class="sm primary" @click="addStudent(c.id)">新增學生</button>
+                      <span v-if="addStudentErr[c.id]" class="error-box" style="padding: 4px 8px">{{ addStudentErr[c.id] }}</span>
                     </div>
                   </td>
                 </tr>

@@ -220,6 +220,36 @@ router.get(
   })
 );
 
+// 單獨新增一個學生(例如填返上傳花名冊時跳過咗嘅空白學號,或者中途插班)。
+// 冇填學號就自動攞返嗰班而家最大學號 + 1;學號已經有人用嘅話(包括之前已刪除嗰啲)會
+// 覆蓋埋個名同重新啟用,同上傳花名冊嗰種 upsert 行為一致
+router.post(
+  '/classes/:id/students',
+  h(async (req, res) => {
+    const cls = await db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id);
+    if (!cls) return res.status(404).json({ error: '搵唔到班級' });
+
+    const name = (req.body?.name || '').toString().trim();
+    if (!name) return res.status(400).json({ error: '請輸入學生姓名' });
+
+    let seatNo = req.body?.seatNo === undefined || req.body?.seatNo === '' ? null : Number(req.body.seatNo);
+    if (seatNo !== null && (!Number.isInteger(seatNo) || seatNo <= 0)) {
+      return res.status(400).json({ error: '學號必須係正整數' });
+    }
+    if (seatNo === null) {
+      const row = await db.prepare('SELECT COALESCE(MAX(seat_no), 0) AS m FROM students WHERE class_id = ?').get(req.params.id);
+      seatNo = row.m + 1;
+    }
+
+    const info = await db
+      .prepare(
+        'INSERT INTO students (class_id, seat_no, name) VALUES (?,?,?) ON CONFLICT(class_id, seat_no) DO UPDATE SET name = excluded.name, active = 1 RETURNING id'
+      )
+      .run(req.params.id, seatNo, name);
+    res.status(201).json({ id: info.lastInsertRowid, seatNo, name });
+  })
+);
+
 // 刪除學生 —— 軟刪除(active=0),歷史出席/評分記錄會保留,唔會喺花名冊/匯出再出現
 router.delete(
   '/classes/:classId/students/:studentId',
