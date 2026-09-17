@@ -48,6 +48,16 @@ function isAbsent(studentId) {
   return scoreOf(attendanceStatus[studentId]) === 0;
 }
 
+// 未揀出席狀態之前,唔可以填表現分/堂課分(要先決定咗出席先可以評分)
+function hasAttendance(studentId) {
+  return !!attendanceStatus[studentId];
+}
+
+// 表現分/堂課分揀嘅掣係咪要鎖住:未揀出席,或者已經係缺席
+function scoreLocked(studentId) {
+  return !hasAttendance(studentId) || isAbsent(studentId);
+}
+
 function clearMap(map) {
   Object.keys(map).forEach((k) => delete map[k]);
 }
@@ -102,14 +112,21 @@ function applyBulkAttendance() {
   if (!bulkAttendanceStatus.value) return;
   for (const s of roster.value) attendanceStatus[s.id] = bulkAttendanceStatus.value;
 }
-// 套用全部表現分/堂課分嗰陣,缺席(出席分為 0)嘅學生要跳過,固定為 0,唔會俾套用全部嘅分數覆蓋
+// 套用全部表現分/堂課分嗰陣:未揀出席狀態嘅學生跳過(唔郁佢),缺席嘅學生固定為 0,
+// 淨係對已經揀咗出席、又冇缺席嘅學生套用個分數
 function applyBulkPerformance() {
   if (bulkPerformanceScore.value === null || bulkPerformanceScore.value === '') return;
-  for (const s of roster.value) performanceScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkPerformanceScore.value);
+  for (const s of roster.value) {
+    if (!hasAttendance(s.id)) continue;
+    performanceScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkPerformanceScore.value);
+  }
 }
 function applyBulkLesson() {
   if (bulkLessonScore.value === null || bulkLessonScore.value === '') return;
-  for (const s of roster.value) lessonScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkLessonScore.value);
+  for (const s of roster.value) {
+    if (!hasAttendance(s.id)) continue;
+    lessonScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkLessonScore.value);
+  }
 }
 
 // ---- 儲存 (三種分數獨立判斷:淨係填咗至少一個學生嘅先會檢查/儲存,完全冇填就當日冇呢類記錄) ----
@@ -339,8 +356,8 @@ onMounted(async () => {
                 <AttendanceStatusPicker v-model="attendanceStatus[s.id]" :options="attendanceStatusOptions" />
               </td>
               <td>{{ attendanceStatus[s.id] ? scoreOf(attendanceStatus[s.id]) : '-' }}</td>
-              <td><ScorePicker v-model="performanceScores[s.id]" :presets="meta.presetScores" :disabled="isAbsent(s.id)" /></td>
-              <td><ScorePicker v-model="lessonScores[s.id]" :presets="meta.presetScores" :disabled="isAbsent(s.id)" /></td>
+              <td><ScorePicker v-model="performanceScores[s.id]" :presets="meta.presetScores" :disabled="scoreLocked(s.id)" /></td>
+              <td><ScorePicker v-model="lessonScores[s.id]" :presets="meta.presetScores" :disabled="scoreLocked(s.id)" /></td>
             </tr>
           </tbody>
         </table>
