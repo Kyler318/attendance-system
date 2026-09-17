@@ -4,6 +4,7 @@ import { computed } from 'vue';
 const props = defineProps({
   modelValue: { type: Number, default: null },
   presets: { type: Array, default: () => [100, 80, 60, 40] },
+  disabled: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:modelValue']);
 
@@ -24,6 +25,7 @@ function onCustomInput(e) {
       v-for="p in presets"
       :key="p"
       type="button"
+      :disabled="disabled"
       :class="{ primary: modelValue === p }"
       style="padding: 4px 8px; font-size: 13px"
       @click="pick(p)"
@@ -35,6 +37,7 @@ function onCustomInput(e) {
       min="0"
       max="100"
       placeholder="自訂"
+      :disabled="disabled"
       :value="isCustom ? modelValue : ''"
       @input="onCustomInput"
       style="width: 56px; padding: 4px 6px; font-size: 13px"
