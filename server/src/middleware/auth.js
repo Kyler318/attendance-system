@@ -105,7 +105,14 @@ function requireRole(role) {
 async function requireClassSubjectAccess(req, res, next) {
   try {
     const id = Number(req.params.id);
-    const cs = await db.prepare('SELECT * FROM class_subjects WHERE id = ?').get(id);
+    const cs = await db
+      .prepare(
+        `SELECT cs.*, c.class_type AS class_type
+         FROM class_subjects cs
+         JOIN classes c ON c.id = cs.class_id
+         WHERE cs.id = ?`
+      )
+      .get(id);
     if (!cs) return res.status(404).json({ error: '找不到班級/科目' });
     if (req.user.role !== 'admin' && cs.teacher_id !== req.user.id) {
       return res.status(403).json({ error: '你冇呢個班級/科目嘅權限' });

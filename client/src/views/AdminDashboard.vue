@@ -33,16 +33,28 @@ onMounted(reloadAll);
 
 // ---- 班級 ----
 const newClassName = ref('');
+const newClassType = ref('general');
 const classErr = ref('');
 async function createClass() {
   classErr.value = '';
   if (!newClassName.value) return;
   try {
-    await http.post('/admin/classes', { name: newClassName.value });
+    await http.post('/admin/classes', { name: newClassName.value, classType: newClassType.value });
     newClassName.value = '';
+    newClassType.value = 'general';
     await reloadAll();
   } catch (e) {
     classErr.value = e.response?.data?.error || '新增失敗';
+  }
+}
+
+const classTypeSaving = reactive({});
+async function updateClassType(cls) {
+  classTypeSaving[cls.id] = true;
+  try {
+    await http.put(`/admin/classes/${cls.id}`, { classType: cls.class_type });
+  } finally {
+    classTypeSaving[cls.id] = false;
   }
 }
 
@@ -254,6 +266,10 @@ async function loadRecords() {
         <h3 style="margin-top: 0">班級</h3>
         <div class="row">
           <input v-model="newClassName" placeholder="新班級名稱,例如 F2A(菁)" />
+          <select v-model="newClassType">
+            <option value="general">普中</option>
+            <option value="vocational">職中</option>
+          </select>
           <button class="primary" @click="createClass">新增班級</button>
         </div>
         <div v-if="classErr" class="error-box" style="margin-top: 8px">{{ classErr }}</div>
@@ -276,18 +292,24 @@ async function loadRecords() {
 
         <div class="table-wrap" style="margin-top: 12px">
           <table>
-            <thead><tr><th style="text-align: left">班級</th><th>上傳花名冊 (Excel)</th><th>結果</th><th>學生</th><th></th></tr></thead>
+            <thead><tr><th style="text-align: left">班級</th><th>類型</th><th>上傳花名冊 (Excel)</th><th>結果</th><th>學生</th><th></th></tr></thead>
             <tbody>
               <template v-for="c in classes" :key="c.id">
                 <tr>
                   <td class="name-cell">{{ c.name }}</td>
+                  <td>
+                    <select v-model="c.class_type" :disabled="classTypeSaving[c.id]" @change="updateClassType(c)">
+                      <option value="general">普中</option>
+                      <option value="vocational">職中</option>
+                    </select>
+                  </td>
                   <td><input type="file" accept=".xlsx" @change="(e) => uploadRoster(c.id, e)" /></td>
                   <td class="muted">{{ rosterMsg[c.id] || '' }}</td>
                   <td><button class="sm" @click="toggleClassStudents(c.id)">{{ expandedClassId === c.id ? '收起' : '查看/刪除' }}</button></td>
                   <td><button class="sm danger" @click="deleteClass(c)">刪除班級</button></td>
                 </tr>
                 <tr v-if="expandedClassId === c.id">
-                  <td colspan="5" style="text-align: left; background: #fafbfd">
+                  <td colspan="6" style="text-align: left; background: #fafbfd">
                     <p v-if="classStudentsLoading" class="muted">載入緊...</p>
                     <p v-else-if="!classStudents[c.id] || classStudents[c.id].length === 0" class="muted">呢個班未有學生。</p>
                     <div v-else class="row" style="flex-wrap: wrap; gap: 8px">

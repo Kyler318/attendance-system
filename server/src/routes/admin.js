@@ -5,6 +5,7 @@ const db = require('../db');
 const { authenticate, requireRole } = require('../middleware/auth');
 const { parseRosterBuffer, parseRosterWorkbookSheets, buildClassExportWorkbook } = require('../utils/excel');
 const { gatherClassExportData } = require('../utils/exportData');
+const { normalizeClassType } = require('../utils/scoring');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -92,11 +93,31 @@ router.get(
 router.post(
   '/classes',
   h(async (req, res) => {
-    const { name } = req.body || {};
+    const { name, classType } = req.body || {};
     if (!name) return res.status(400).json({ error: '請輸入班級名稱' });
     try {
-      const info = await db.prepare('INSERT INTO classes (name) VALUES (?) RETURNING id').run(name);
+      const info = await db
+        .prepare('INSERT INTO classes (name, class_type) VALUES (?,?) RETURNING id')
+        .run(name, normalizeClassType(classType));
       res.status(201).json({ id: info.lastInsertRowid, name });
+    } catch (e) {
+      res.status(409).json({ error: '班級名稱已存在' });
+    }
+  })
+);
+
+// 更改班級名稱 / 類型(普中 general / 職中 vocational —— 影響單節出席「遲到」嘅計分)
+router.put(
+  '/classes/:id',
+  h(async (req, res) => {
+    const { name, classType } = req.body || {};
+    const cls = await db.prepare('SELECT * FROM classes WHERE id = ?').get(req.params.id);
+    if (!cls) return res.status(404).json({ error: '搵唔到班級' });
+    try {
+      await db
+        .prepare('UPDATE classes SET name = ?, class_type = ? WHERE id = ?')
+        .run(name || cls.name, classType ? normalizeClassType(classType) : cls.class_type, req.params.id);
+      res.json({ ok: true });
     } catch (e) {
       res.status(409).json({ error: '班級名稱已存在' });
     }

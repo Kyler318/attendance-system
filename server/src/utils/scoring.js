@@ -1,12 +1,11 @@
 // 出席分計分規則
-// 單課 (single period)
+// 單課 (single period) —— 遲到分數會因應班級類型(普中 general / 職中 vocational)唔同
 const SINGLE_STATUS_SCORES = {
-  on_time: 100, // 準時出席
-  late: 90, // 遲到
-  absent: 0, // 缺席
+  general: { on_time: 100, late: 80, absent: 0 }, // 普中:遲到調整做 80
+  vocational: { on_time: 100, late: 90, absent: 0 }, // 職中:維持 90
 };
 
-// 雙課 (double / consecutive two periods)
+// 雙課 (double / consecutive two periods) —— 唔理班級類型,兩種都一樣
 const DOUBLE_STATUS_SCORES = {
   on_time: 100, // 準時出席(兩節都準時)
   late_p1: 90, // 第一節遲到
@@ -29,9 +28,19 @@ const DOUBLE_STATUS_LABELS = {
   absent: '缺席 (全缺)',
 };
 
-function statusOptions(periodMode) {
+const CLASS_TYPES = ['general', 'vocational'];
+
+function normalizeClassType(classType) {
+  return CLASS_TYPES.includes(classType) ? classType : 'general';
+}
+
+function singleScoresFor(classType) {
+  return SINGLE_STATUS_SCORES[normalizeClassType(classType)];
+}
+
+function statusOptions(periodMode, classType) {
   const map = periodMode === 'double' ? DOUBLE_STATUS_LABELS : SINGLE_STATUS_LABELS;
-  const scores = periodMode === 'double' ? DOUBLE_STATUS_SCORES : SINGLE_STATUS_SCORES;
+  const scores = periodMode === 'double' ? DOUBLE_STATUS_SCORES : singleScoresFor(classType);
   return Object.keys(map).map((status) => ({
     status,
     label: map[status],
@@ -39,8 +48,8 @@ function statusOptions(periodMode) {
   }));
 }
 
-function scoreFor(periodMode, status) {
-  const map = periodMode === 'double' ? DOUBLE_STATUS_SCORES : SINGLE_STATUS_SCORES;
+function scoreFor(periodMode, status, classType) {
+  const map = periodMode === 'double' ? DOUBLE_STATUS_SCORES : singleScoresFor(classType);
   if (!(status in map)) {
     throw new Error(`無效嘅出席狀態: ${status} (period_mode=${periodMode})`);
   }
@@ -49,4 +58,4 @@ function scoreFor(periodMode, status) {
 
 const PRESET_SCORES = [100, 80, 60, 40];
 
-module.exports = { statusOptions, scoreFor, PRESET_SCORES };
+module.exports = { statusOptions, scoreFor, PRESET_SCORES, CLASS_TYPES, normalizeClassType };

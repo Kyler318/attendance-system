@@ -37,7 +37,7 @@ router.get(
   h(async (req, res) => {
     const row = await db
       .prepare(
-        `SELECT cs.id, cs.homeroom_teacher, c.name AS class_name, s.name AS subject_name
+        `SELECT cs.id, cs.homeroom_teacher, c.name AS class_name, c.class_type AS class_type, s.name AS subject_name
        FROM class_subjects cs
        JOIN classes c ON c.id = cs.class_id
        JOIN subjects s ON s.id = cs.subject_id
@@ -48,11 +48,14 @@ router.get(
   })
 );
 
+// classType(普中 general / 職中 vocational)會影響單節出席「遲到」嘅分數,由前端帶落嚟
+// (前端會先攞 class-subject 資訊知道個 class_type,先至再攞呢個 meta)
 router.get('/meta', (req, res) => {
+  const classType = req.query.classType;
   res.json({
     presetScores: PRESET_SCORES,
-    singleStatusOptions: statusOptions('single'),
-    doubleStatusOptions: statusOptions('double'),
+    singleStatusOptions: statusOptions('single', classType),
+    doubleStatusOptions: statusOptions('double', classType),
   });
 });
 
@@ -94,7 +97,11 @@ router.post(
 
     let scored;
     try {
-      scored = records.map((r) => ({ studentId: r.studentId, status: r.status, score: scoreFor(periodMode, r.status) }));
+      scored = records.map((r) => ({
+        studentId: r.studentId,
+        status: r.status,
+        score: scoreFor(periodMode, r.status, req.classSubject.class_type),
+      }));
     } catch (e) {
       return res.status(400).json({ error: e.message });
     }

@@ -265,13 +265,14 @@ watch(activeTab, (tab) => {
 const exportUrl = computed(() => `/api/teacher/class-subjects/${csId.value}/export`);
 
 onMounted(async () => {
-  const [infoRes, rosterRes, metaRes] = await Promise.all([
+  // class_type(普中/職中)會影響單節出席「遲到」嘅分數,要先攞返班級資訊先可以攞啱嘅 meta
+  const [infoRes, rosterRes] = await Promise.all([
     http.get(`/teacher/class-subjects/${csId.value}`),
     http.get(`/teacher/class-subjects/${csId.value}/roster`),
-    http.get('/teacher/meta'),
   ]);
   info.value = infoRes.data;
   roster.value = rosterRes.data;
+  const metaRes = await http.get('/teacher/meta', { params: { classType: info.value?.class_type } });
   meta.value = metaRes.data;
   await loadDaily();
 });
@@ -281,6 +282,7 @@ onMounted(async () => {
   <div class="page">
     <div class="row">
       <h2 style="margin: 0">{{ info?.class_name }} - {{ info?.subject_name }}</h2>
+      <span class="muted" v-if="info">{{ info.class_type === 'vocational' ? '職中' : '普中' }}</span>
       <span class="muted" v-if="info?.homeroom_teacher">導師:{{ info.homeroom_teacher }}</span>
       <span class="muted">共 {{ roster.length }} 位學生</span>
     </div>

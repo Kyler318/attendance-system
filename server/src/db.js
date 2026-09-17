@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS remember_tokens (
 CREATE TABLE IF NOT EXISTS classes (
   id SERIAL PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
+  class_type TEXT NOT NULL DEFAULT 'general',
   created_at TEXT NOT NULL DEFAULT (now()::text)
 );
 
@@ -199,6 +200,11 @@ function init() {
       // pg 用 extended query protocol(有 bind 過程)嗰陣唔支援一次過幾句 statement
       const statements = SCHEMA_SQL.split(';').map((s) => s.trim()).filter(Boolean);
       for (const stmt of statements) await pool.query(stmt);
+
+      // Migration:舊資料庫已經有 classes 表但冇 class_type 呢欄,補返(新資料庫嘅
+      // CREATE TABLE 已經有呢欄,呢句係 no-op)
+      await pool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS class_type TEXT NOT NULL DEFAULT 'general'");
+
       const { rows } = await pool.query('SELECT COUNT(*)::int AS c FROM users');
       if (rows[0].c === 0) {
         const hash = bcrypt.hashSync('admin123', 10);
