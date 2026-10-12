@@ -72,12 +72,21 @@ router.get(
 
 // ---- 出席 ----
 // 每日可以有「日間課程」同「夜間課程」兩個點名 session(session_type = 'day' / 'night')。
-// 夜間係選填;如果嗰日日間已經點咗名,夜間就唔使(亦唔畀)再點。
+// 夜間係選填(唔係每班都有);日間已經點到名(狀態唔係缺席)嘅學生,夜間唔使再點,
+// 夜間淨係點日間未點到嘅學生
 const SESSION_TYPES = ['day', 'night'];
 
 async function sessionsByType(classSubjectId, date) {
   const rows = await db.prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?').all(classSubjectId, date);
   return { day: rows.find((r) => r.session_type === 'day'), night: rows.find((r) => r.session_type === 'night') };
+}
+
+async function presentStudentIds(session) {
+  if (!session) return [];
+  const rows = await db
+    .prepare("SELECT student_id FROM attendance_records WHERE session_id = ? AND status <> 'absent'")
+    .all(session.id);
+  return rows.map((r) => r.student_id);
 }
 
 router.get(
@@ -89,7 +98,12 @@ router.get(
     if (!date) return res.status(400).json({ error: '請提供日期' });
     if (!SESSION_TYPES.includes(sessionType)) return res.status(400).json({ error: '無效嘅課程類型' });
     const sessions = await sessionsByType(req.classSubject.id, date);
-    const flags = { dayExists: !!sessions.day, nightExists: !!sessions.night };
+    const flags = {
+      dayExists: !!sessions.day,
+      nightExists: !!sessions.night,
+      dayPresentStudentIds: await presentStudentIds(sessions.day),
+      nightPresentStudentIds: await presentStudentIds(sessions.night),
+    };
     const session = sessions[sessionType];
     if (!session) return res.json({ exists: false, periodMode: 'single', records: [], ...flags });
     const records = await db.prepare('SELECT student_id, status, score FROM attendance_records WHERE session_id = ?').all(session.id);
@@ -120,10 +134,15 @@ router.post(
 
     const tx = db.transaction(async () => {
       const sessions = await sessionsByType(req.classSubject.id, date);
-      if (sessionType === 'night' && sessions.day) {
-        const err = new Error('呢日日間課程已經點咗名,夜間課程唔使再點名');
-        err.status = 400;
-        throw err;
+      if (sessionType === 'night') {
+        // 日間已點到名嘅學生唔使(亦唔會)記錄夜間出席
+        const present = new Set(await presentStudentIds(sessions.day));
+        scored = scored.filter((r) => !present.has(r.studentId));
+        if (scored.length === 0) {
+          const err = new Error('呢啲學生日間已經點到名,夜間課程唔使再點名');
+          err.status = 400;
+          throw err;
+        }
       }
       let session = sessions[sessionType];
       if (session) {

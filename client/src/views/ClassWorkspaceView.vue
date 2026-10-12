@@ -26,11 +26,17 @@ function todayStr() {
 // ---- 今日課堂記錄 (出席 / 表現分 / 堂課分 合併一齊填,一次過儲存) ----
 const dailyDate = ref(todayStr());
 const periodMode = ref('single');
-// 日間課程 / 夜間課程:夜間係選填,如果嗰日日間已經點咗名,夜間就唔使點
+// 日間課程 / 夜間課程:夜間係選填(唔係每班都有夜間)。日間已經點到名(出席/遲到)嘅學生,
+// 夜間唔使再點,夜間名單淨係得日間未點到(缺席,或者嗰日日間未點名)嘅學生
 const sessionType = ref('day');
 const dayExists = ref(false);
 const nightExists = ref(false);
-const nightNotNeeded = computed(() => sessionType.value === 'night' && dayExists.value);
+const dayPresentIds = ref(new Set());
+const nightPresentIds = ref(new Set());
+const dailyRoster = computed(() =>
+  sessionType.value === 'night' ? roster.value.filter((s) => !dayPresentIds.value.has(s.id)) : roster.value
+);
+const nightNotNeeded = computed(() => sessionType.value === 'night' && roster.value.length > 0 && dailyRoster.value.length === 0);
 const attendanceStatus = reactive({});
 const performanceScores = reactive({});
 const lessonScores = reactive({});
@@ -48,8 +54,11 @@ function scoreOf(status) {
   return opt ? opt.score : null;
 }
 
-// 出席分為 0(缺席)嘅學生,表現分應該跟住為 0
+// 出席分為 0(缺席)嘅學生,表現分應該跟住為 0。
+// 表現分/堂課分係日間夜間共用(每日一個),所以日間缺席但夜間有出席嘅學生唔當缺席,
+// 唔好喺日間畫面將佢夜間攞到嘅分拉返做 0
 function isAbsent(studentId) {
+  if (sessionType.value === 'day' && nightPresentIds.value.has(studentId)) return false;
   return scoreOf(attendanceStatus[studentId]) === 0;
 }
 
@@ -69,7 +78,7 @@ function hasScore(map, studentId) {
 
 // 呢日係咪有堂課:睇下有冇出席(冇缺席)嘅學生填咗堂課分。冇嘅話即係嗰日冇堂課,
 // 缺席學生唔使填 0;有嘅話先至代表嗰日有堂課,缺席學生冇做到,先鎖住/填 0
-const lessonActive = computed(() => roster.value.some((s) => !isAbsent(s.id) && hasScore(lessonScores, s.id)));
+const lessonActive = computed(() => dailyRoster.value.some((s) => !isAbsent(s.id) && hasScore(lessonScores, s.id)));
 
 // 堂課分揀嘅掣係咪要鎖住:未揀出席,或者(缺席 且 嗰日其他人有堂課)
 function lessonLocked(studentId) {
@@ -85,7 +94,7 @@ function clearMap(map) {
 watch(
   [attendanceStatus, lessonScores],
   () => {
-    for (const s of roster.value) {
+    for (const s of dailyRoster.value) {
       if (isAbsent(s.id)) {
         performanceScores[s.id] = 0;
         if (lessonActive.value) lessonScores[s.id] = 0;
@@ -114,6 +123,8 @@ async function loadDaily() {
     periodMode.value = loadedMode;
     dayExists.value = !!attRes.data.dayExists;
     nightExists.value = !!attRes.data.nightExists;
+    dayPresentIds.value = new Set(attRes.data.dayPresentStudentIds || []);
+    nightPresentIds.value = new Set(attRes.data.nightPresentStudentIds || []);
     clearMap(attendanceStatus);
     for (const r of attRes.data.records) attendanceStatus[r.student_id] = r.status;
     clearMap(performanceScores);
@@ -144,20 +155,20 @@ const bulkLessonScore = ref(null);
 
 function applyBulkAttendance() {
   if (!bulkAttendanceStatus.value) return;
-  for (const s of roster.value) attendanceStatus[s.id] = bulkAttendanceStatus.value;
+  for (const s of dailyRoster.value) attendanceStatus[s.id] = bulkAttendanceStatus.value;
 }
 // 套用全部表現分/堂課分嗰陣:未揀出席狀態嘅學生跳過(唔郁佢),缺席嘅學生固定為 0,
 // 淨係對已經揀咗出席、又冇缺席嘅學生套用個分數
 function applyBulkPerformance() {
   if (bulkPerformanceScore.value === null || bulkPerformanceScore.value === '') return;
-  for (const s of roster.value) {
+  for (const s of dailyRoster.value) {
     if (!hasAttendance(s.id)) continue;
     performanceScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkPerformanceScore.value);
   }
 }
 function applyBulkLesson() {
   if (bulkLessonScore.value === null || bulkLessonScore.value === '') return;
-  for (const s of roster.value) {
+  for (const s of dailyRoster.value) {
     if (!hasAttendance(s.id)) continue;
     lessonScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkLessonScore.value);
   }
@@ -166,10 +177,10 @@ function applyBulkLesson() {
 // ---- 儲存 (出席/表現分:淨係填咗至少一個學生嘅先會檢查/儲存,填咗就要成班填晒;
 //           堂課分:唔一定要填,得幾個學生有分都可以淨係儲存嗰幾個,唔使成班填晒) ----
 function buildCategoryPlan(map, label, { requireComplete = true } = {}) {
-  const touched = roster.value.filter((s) => map[s.id] !== undefined && map[s.id] !== null && map[s.id] !== '');
+  const touched = dailyRoster.value.filter((s) => map[s.id] !== undefined && map[s.id] !== null && map[s.id] !== '');
   if (touched.length === 0) return { skip: true, touched };
-  if (requireComplete && touched.length !== roster.value.length) {
-    return { skip: false, error: `「${label}」仲有 ${roster.value.length - touched.length} 位學生未填`, touched };
+  if (requireComplete && touched.length !== dailyRoster.value.length) {
+    return { skip: false, error: `「${label}」仲有 ${dailyRoster.value.length - touched.length} 位學生未填`, touched };
   }
   return { skip: false, error: null, touched };
 }
@@ -178,7 +189,7 @@ async function saveDaily() {
   dailyErr.value = '';
   dailyMsg.value = '';
   if (nightNotNeeded.value) {
-    dailyErr.value = '呢日日間課程已經點咗名,夜間課程唔使再點名';
+    dailyErr.value = '呢日日間課程全部學生都點到名,夜間課程唔使再點名';
     return;
   }
 
@@ -201,7 +212,7 @@ async function saveDaily() {
   try {
     const tasks = [];
     if (!attPlan.skip) {
-      const records = roster.value.map((s) => ({ studentId: s.id, status: attendanceStatus[s.id] }));
+      const records = dailyRoster.value.map((s) => ({ studentId: s.id, status: attendanceStatus[s.id] }));
       tasks.push(
         http
           .post(`/teacher/class-subjects/${csId.value}/attendance`, {
@@ -212,13 +223,19 @@ async function saveDaily() {
           })
           .then(() => {
             saved.push(sessionType.value === 'night' ? '夜間出席' : '日間出席');
-            if (sessionType.value === 'night') nightExists.value = true;
-            else dayExists.value = true;
+            const presentIds = new Set(records.filter((r) => r.status !== 'absent').map((r) => r.studentId));
+            if (sessionType.value === 'night') {
+              nightExists.value = true;
+              nightPresentIds.value = presentIds;
+            } else {
+              dayExists.value = true;
+              dayPresentIds.value = presentIds;
+            }
           })
       );
     }
     if (!perfPlan.skip) {
-      const records = roster.value.map((s) => ({ studentId: s.id, score: performanceScores[s.id] }));
+      const records = dailyRoster.value.map((s) => ({ studentId: s.id, score: performanceScores[s.id] }));
       tasks.push(
         http
           .post(`/teacher/class-subjects/${csId.value}/performance_scores`, { date: dailyDate.value, records })
@@ -251,6 +268,8 @@ async function deleteDaily() {
     await http.delete(`/teacher/class-subjects/${csId.value}/daily-record`, { params: { date: dailyDate.value } });
     dayExists.value = false;
     nightExists.value = false;
+    dayPresentIds.value = new Set();
+    nightPresentIds.value = new Set();
     clearMap(attendanceStatus);
     clearMap(performanceScores);
     clearMap(lessonScores);
@@ -389,7 +408,14 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div v-if="nightNotNeeded" class="success-box">呢日日間課程已經點咗名,夜間課程唔使再點名。</div>
+      <div v-if="nightNotNeeded" class="success-box">呢日日間課程全部學生都點到名,夜間課程唔使再點名。</div>
+      <div v-else-if="sessionType === 'night'" class="muted">
+        夜間課程係選填,冇夜間課程可以唔使理。{{
+          dayExists
+            ? `日間已點到名嘅 ${roster.length - dailyRoster.length} 位學生唔使再點,下面淨係列出日間未點到嘅 ${dailyRoster.length} 位。`
+            : '呢日日間未點名,所以列出全班學生。'
+        }}
+      </div>
 
       <div v-if="!nightNotNeeded" class="toolbar">
         <span class="label" style="font-weight: 600; color: var(--text)">快速填寫:</span>
@@ -429,7 +455,7 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in roster" :key="s.id">
+            <tr v-for="s in dailyRoster" :key="s.id">
               <td>{{ s.seat_no }}</td>
               <td class="name-cell">{{ s.name }}</td>
               <td>

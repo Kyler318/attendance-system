@@ -9,17 +9,26 @@ async function gatherClassExportData(classSubject) {
     .all(classSubject.class_id);
   const students = studentRows.map((s) => ({ id: s.id, seatNo: s.seat_no, name: s.name }));
 
-  const attendanceRows = await db
+  const sessionRows = await db
     .prepare(
-      `SELECT ls.date AS date, ar.student_id AS student_id, ar.score AS score
+      `SELECT ls.date AS date, ls.session_type AS session_type, ar.student_id AS student_id, ar.status AS status, ar.score AS score
        FROM attendance_records ar
        JOIN lesson_sessions ls ON ls.id = ar.session_id
-       WHERE ls.class_subject_id = ?
-       ORDER BY CASE ls.session_type WHEN 'night' THEN 0 ELSE 1 END`
+       WHERE ls.class_subject_id = ?`
     )
     .all(classSubject.id);
-  // 範本每日只有一格出席分:同一日有日間就用日間,冇日間先用夜間。
-  // 上面 ORDER BY 將夜間排前、日間排後,toMap() 後寫嘅會覆蓋先寫嘅,所以日間優先
+  // 範本每日只有一格出席分,要將日間 / 夜間合併做一格(逐個學生計):
+  // 日間點到名(唔係缺席)就用日間;日間缺席或者冇日間記錄,有夜間就用夜間;都冇就用日間(即係缺席 0 分)
+  const byStudentDate = new Map();
+  for (const r of sessionRows) {
+    const key = `${r.date}|${r.student_id}`;
+    if (!byStudentDate.has(key)) byStudentDate.set(key, { date: r.date, student_id: r.student_id });
+    byStudentDate.get(key)[r.session_type] = r;
+  }
+  const attendanceRows = Array.from(byStudentDate.values()).map(({ date, student_id, day, night }) => {
+    const pick = day && day.status !== 'absent' ? day : night || day;
+    return { date, student_id, score: pick.score };
+  });
 
   const performanceRows = await db
     .prepare('SELECT date, student_id, score FROM performance_scores WHERE class_subject_id = ?')
