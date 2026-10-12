@@ -72,33 +72,22 @@ function performanceLocked(studentId) {
   return !hasAttendance(studentId) || isAbsent(studentId);
 }
 
-function hasScore(map, studentId) {
-  return map[studentId] !== undefined && map[studentId] !== null && map[studentId] !== '';
-}
-
-// 呢日係咪有堂課:睇下有冇出席(冇缺席)嘅學生填咗堂課分。冇嘅話即係嗰日冇堂課,
-// 缺席學生唔使填 0;有嘅話先至代表嗰日有堂課,缺席學生冇做到,先鎖住/填 0
-const lessonActive = computed(() => dailyRoster.value.some((s) => !isAbsent(s.id) && hasScore(lessonScores, s.id)));
-
-// 堂課分揀嘅掣係咪要鎖住:未揀出席,或者(缺席 且 嗰日其他人有堂課)
+// 堂課分揀嘅掣係咪要鎖住:淨係未揀出席先鎖。缺席嘅學生都可以畀堂課分(例如事後補交),
+// 唔會好似表現分咁固定做 0
 function lessonLocked(studentId) {
-  return !hasAttendance(studentId) || (isAbsent(studentId) && lessonActive.value);
+  return !hasAttendance(studentId);
 }
 
 function clearMap(map) {
   Object.keys(map).forEach((k) => delete map[k]);
 }
 
-// 出席狀態一改(包括套用全部出席)、或者堂課分一改,即刻檢查:缺席嘅學生表現分固定拉做 0;
-// 堂課分就淨係喺「嗰日其他人有堂課」先拉做 0,如果嗰日冇人填堂課就唔會逼佢哋填 0
+// 出席狀態一改(包括套用全部出席),即刻檢查:缺席嘅學生表現分固定拉做 0(堂課分唔郁)
 watch(
-  [attendanceStatus, lessonScores],
+  attendanceStatus,
   () => {
     for (const s of dailyRoster.value) {
-      if (isAbsent(s.id)) {
-        performanceScores[s.id] = 0;
-        if (lessonActive.value) lessonScores[s.id] = 0;
-      }
+      if (isAbsent(s.id)) performanceScores[s.id] = 0;
     }
   },
   { deep: true }
@@ -157,8 +146,8 @@ function applyBulkAttendance() {
   if (!bulkAttendanceStatus.value) return;
   for (const s of dailyRoster.value) attendanceStatus[s.id] = bulkAttendanceStatus.value;
 }
-// 套用全部表現分/堂課分嗰陣:未揀出席狀態嘅學生跳過(唔郁佢),缺席嘅學生固定為 0,
-// 淨係對已經揀咗出席、又冇缺席嘅學生套用個分數
+// 套用全部表現分/堂課分嗰陣:未揀出席狀態嘅學生跳過(唔郁佢)。
+// 表現分:缺席嘅學生固定為 0。堂課分:缺席嘅學生跳過唔郁,由老師逐個決定要唔要畀分
 function applyBulkPerformance() {
   if (bulkPerformanceScore.value === null || bulkPerformanceScore.value === '') return;
   for (const s of dailyRoster.value) {
@@ -170,7 +159,8 @@ function applyBulkLesson() {
   if (bulkLessonScore.value === null || bulkLessonScore.value === '') return;
   for (const s of dailyRoster.value) {
     if (!hasAttendance(s.id)) continue;
-    lessonScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkLessonScore.value);
+    if (isAbsent(s.id)) continue;
+    lessonScores[s.id] = Number(bulkLessonScore.value);
   }
 }
 
