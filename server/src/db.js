@@ -135,9 +135,9 @@ CREATE TABLE IF NOT EXISTS lesson_sessions (
   class_subject_id INTEGER NOT NULL REFERENCES class_subjects(id) ON DELETE CASCADE,
   date TEXT NOT NULL,
   period_mode TEXT NOT NULL CHECK(period_mode IN ('single','double')),
+  session_type TEXT NOT NULL DEFAULT 'day' CHECK(session_type IN ('day','night')),
   created_by INTEGER REFERENCES users(id),
-  updated_at TEXT NOT NULL DEFAULT (now()::text),
-  UNIQUE(class_subject_id, date)
+  updated_at TEXT NOT NULL DEFAULT (now()::text)
 );
 
 CREATE TABLE IF NOT EXISTS attendance_records (
@@ -204,6 +204,17 @@ function init() {
       // Migration:舊資料庫已經有 classes 表但冇 class_type 呢欄,補返(新資料庫嘅
       // CREATE TABLE 已經有呢欄,呢句係 no-op)
       await pool.query("ALTER TABLE classes ADD COLUMN IF NOT EXISTS class_type TEXT NOT NULL DEFAULT 'general'");
+
+      // Migration:日間 / 夜間課程。舊資料庫嘅 lesson_sessions 冇 session_type,補返並預設做 'day'
+      // (即係原有嘅點名記錄全部當日間課程,資料唔會郁)。之後同一日可以有日間同夜間各一個 session,
+      // 所以將舊嘅 UNIQUE(class_subject_id, date) 換成 (class_subject_id, date, session_type)
+      await pool.query(
+        "ALTER TABLE lesson_sessions ADD COLUMN IF NOT EXISTS session_type TEXT NOT NULL DEFAULT 'day' CHECK(session_type IN ('day','night'))"
+      );
+      await pool.query('ALTER TABLE lesson_sessions DROP CONSTRAINT IF EXISTS lesson_sessions_class_subject_id_date_key');
+      await pool.query(
+        'CREATE UNIQUE INDEX IF NOT EXISTS lesson_sessions_cs_date_type_key ON lesson_sessions (class_subject_id, date, session_type)'
+      );
 
       const { rows } = await pool.query('SELECT COUNT(*)::int AS c FROM users');
       if (rows[0].c === 0) {

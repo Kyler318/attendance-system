@@ -71,18 +71,29 @@ router.get(
 );
 
 // ---- 出席 ----
+// 每日可以有「日間課程」同「夜間課程」兩個點名 session(session_type = 'day' / 'night')。
+// 夜間係選填;如果嗰日日間已經點咗名,夜間就唔使(亦唔畀)再點。
+const SESSION_TYPES = ['day', 'night'];
+
+async function sessionsByType(classSubjectId, date) {
+  const rows = await db.prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?').all(classSubjectId, date);
+  return { day: rows.find((r) => r.session_type === 'day'), night: rows.find((r) => r.session_type === 'night') };
+}
+
 router.get(
   '/class-subjects/:id/attendance',
   requireClassSubjectAccess,
   h(async (req, res) => {
     const { date } = req.query;
+    const sessionType = req.query.sessionType || 'day';
     if (!date) return res.status(400).json({ error: '請提供日期' });
-    const session = await db
-      .prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?')
-      .get(req.classSubject.id, date);
-    if (!session) return res.json({ exists: false, periodMode: 'single', records: [] });
+    if (!SESSION_TYPES.includes(sessionType)) return res.status(400).json({ error: '無效嘅課程類型' });
+    const sessions = await sessionsByType(req.classSubject.id, date);
+    const flags = { dayExists: !!sessions.day, nightExists: !!sessions.night };
+    const session = sessions[sessionType];
+    if (!session) return res.json({ exists: false, periodMode: 'single', records: [], ...flags });
     const records = await db.prepare('SELECT student_id, status, score FROM attendance_records WHERE session_id = ?').all(session.id);
-    res.json({ exists: true, periodMode: session.period_mode, records });
+    res.json({ exists: true, periodMode: session.period_mode, records, ...flags });
   })
 );
 
@@ -91,7 +102,8 @@ router.post(
   requireClassSubjectAccess,
   h(async (req, res) => {
     const { date, periodMode, records } = req.body || {};
-    if (!date || !['single', 'double'].includes(periodMode) || !Array.isArray(records)) {
+    const sessionType = req.body?.sessionType || 'day';
+    if (!date || !['single', 'double'].includes(periodMode) || !Array.isArray(records) || !SESSION_TYPES.includes(sessionType)) {
       return res.status(400).json({ error: '參數不完整' });
     }
 
@@ -107,7 +119,13 @@ router.post(
     }
 
     const tx = db.transaction(async () => {
-      let session = await db.prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?').get(req.classSubject.id, date);
+      const sessions = await sessionsByType(req.classSubject.id, date);
+      if (sessionType === 'night' && sessions.day) {
+        const err = new Error('呢日日間課程已經點咗名,夜間課程唔使再點名');
+        err.status = 400;
+        throw err;
+      }
+      let session = sessions[sessionType];
       if (session) {
         await db
           .prepare("UPDATE lesson_sessions SET period_mode = ?, created_by = ?, updated_at = now()::text WHERE id = ?")
@@ -115,14 +133,19 @@ router.post(
         await db.prepare('DELETE FROM attendance_records WHERE session_id = ?').run(session.id);
       } else {
         const info = await db
-          .prepare('INSERT INTO lesson_sessions (class_subject_id, date, period_mode, created_by) VALUES (?,?,?,?) RETURNING id')
-          .run(req.classSubject.id, date, periodMode, req.user.id);
+          .prepare('INSERT INTO lesson_sessions (class_subject_id, date, period_mode, session_type, created_by) VALUES (?,?,?,?,?) RETURNING id')
+          .run(req.classSubject.id, date, periodMode, sessionType, req.user.id);
         session = { id: info.lastInsertRowid };
       }
       const insert = db.prepare('INSERT INTO attendance_records (session_id, student_id, status, score) VALUES (?,?,?,?)');
       for (const r of scored) await insert.run(session.id, r.studentId, r.status, r.score);
     });
-    await tx();
+    try {
+      await tx();
+    } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: e.message });
+      throw e;
+    }
 
     res.json({ ok: true, records: scored });
   })
@@ -171,7 +194,7 @@ function makeScoreEndpoints(table) {
 makeScoreEndpoints('performance_scores');
 makeScoreEndpoints('lesson_scores');
 
-// 刪除某一日嘅記錄(出席 + 表現分 + 堂課分 一齊刪,對應「今日課堂記錄」個合併畫面),不可還原
+// 刪除某一日嘅記錄(日間/夜間出席 + 表現分 + 堂課分 一齊刪,對應「今日課堂記錄」個合併畫面),不可還原
 router.delete(
   '/class-subjects/:id/daily-record',
   requireClassSubjectAccess,
@@ -179,10 +202,8 @@ router.delete(
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: '請提供日期' });
     const tx = db.transaction(async () => {
-      const session = await db
-        .prepare('SELECT * FROM lesson_sessions WHERE class_subject_id = ? AND date = ?')
-        .get(req.classSubject.id, date);
-      if (session) await db.prepare('DELETE FROM lesson_sessions WHERE id = ?').run(session.id); // cascade 埋 attendance_records
+      // 日間 + 夜間 兩個 session 一齊刪,cascade 埋 attendance_records
+      await db.prepare('DELETE FROM lesson_sessions WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
       await db.prepare('DELETE FROM performance_scores WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
       await db.prepare('DELETE FROM lesson_scores WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
     });

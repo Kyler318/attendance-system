@@ -14,9 +14,12 @@ async function gatherClassExportData(classSubject) {
       `SELECT ls.date AS date, ar.student_id AS student_id, ar.score AS score
        FROM attendance_records ar
        JOIN lesson_sessions ls ON ls.id = ar.session_id
-       WHERE ls.class_subject_id = ?`
+       WHERE ls.class_subject_id = ?
+       ORDER BY CASE ls.session_type WHEN 'night' THEN 0 ELSE 1 END`
     )
     .all(classSubject.id);
+  // 範本每日只有一格出席分:同一日有日間就用日間,冇日間先用夜間。
+  // 上面 ORDER BY 將夜間排前、日間排後,toMap() 後寫嘅會覆蓋先寫嘅,所以日間優先
 
   const performanceRows = await db
     .prepare('SELECT date, student_id, score FROM performance_scores WHERE class_subject_id = ?')

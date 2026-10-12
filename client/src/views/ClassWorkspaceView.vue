@@ -26,6 +26,11 @@ function todayStr() {
 // ---- 今日課堂記錄 (出席 / 表現分 / 堂課分 合併一齊填,一次過儲存) ----
 const dailyDate = ref(todayStr());
 const periodMode = ref('single');
+// 日間課程 / 夜間課程:夜間係選填,如果嗰日日間已經點咗名,夜間就唔使點
+const sessionType = ref('day');
+const dayExists = ref(false);
+const nightExists = ref(false);
+const nightNotNeeded = computed(() => sessionType.value === 'night' && dayExists.value);
 const attendanceStatus = reactive({});
 const performanceScores = reactive({});
 const lessonScores = reactive({});
@@ -96,11 +101,19 @@ async function loadDaily() {
   dailyLoading.value = true;
   try {
     const [attRes, perfRes, lessonRes] = await Promise.all([
-      http.get(`/teacher/class-subjects/${csId.value}/attendance`, { params: { date: dailyDate.value } }),
+      http.get(`/teacher/class-subjects/${csId.value}/attendance`, {
+        params: { date: dailyDate.value, sessionType: sessionType.value },
+      }),
       http.get(`/teacher/class-subjects/${csId.value}/performance_scores`, { params: { date: dailyDate.value } }),
       http.get(`/teacher/class-subjects/${csId.value}/lesson_scores`, { params: { date: dailyDate.value } }),
     ]);
-    periodMode.value = attRes.data.periodMode || 'single';
+    const loadedMode = attRes.data.periodMode || 'single';
+    // 由載入改 periodMode 唔應該觸發下面「改堂數就清空出席」嗰個 watcher(佢係非同步行,
+    // 會喺填好記錄之後先清,將啱啱載入嘅出席狀態洗走)
+    if (periodMode.value !== loadedMode) skipPeriodClear = true;
+    periodMode.value = loadedMode;
+    dayExists.value = !!attRes.data.dayExists;
+    nightExists.value = !!attRes.data.nightExists;
     clearMap(attendanceStatus);
     for (const r of attRes.data.records) attendanceStatus[r.student_id] = r.status;
     clearMap(performanceScores);
@@ -112,10 +125,17 @@ async function loadDaily() {
   }
 }
 
-watch([dailyDate, activeTab], ([, tab]) => {
+watch([dailyDate, sessionType, activeTab], ([, , tab]) => {
   if (tab === 'daily' && csId.value) loadDaily();
 });
-watch(periodMode, () => clearMap(attendanceStatus));
+let skipPeriodClear = false;
+watch(periodMode, () => {
+  if (skipPeriodClear) {
+    skipPeriodClear = false;
+    return;
+  }
+  clearMap(attendanceStatus);
+});
 
 // ---- 快速填寫 ----
 const bulkAttendanceStatus = ref('');
@@ -157,6 +177,10 @@ function buildCategoryPlan(map, label, { requireComplete = true } = {}) {
 async function saveDaily() {
   dailyErr.value = '';
   dailyMsg.value = '';
+  if (nightNotNeeded.value) {
+    dailyErr.value = '呢日日間課程已經點咗名,夜間課程唔使再點名';
+    return;
+  }
 
   const attPlan = buildCategoryPlan(attendanceStatus, '出席狀態');
   const perfPlan = buildCategoryPlan(performanceScores, '表現分');
@@ -180,8 +204,17 @@ async function saveDaily() {
       const records = roster.value.map((s) => ({ studentId: s.id, status: attendanceStatus[s.id] }));
       tasks.push(
         http
-          .post(`/teacher/class-subjects/${csId.value}/attendance`, { date: dailyDate.value, periodMode: periodMode.value, records })
-          .then(() => saved.push('出席'))
+          .post(`/teacher/class-subjects/${csId.value}/attendance`, {
+            date: dailyDate.value,
+            periodMode: periodMode.value,
+            sessionType: sessionType.value,
+            records,
+          })
+          .then(() => {
+            saved.push(sessionType.value === 'night' ? '夜間出席' : '日間出席');
+            if (sessionType.value === 'night') nightExists.value = true;
+            else dayExists.value = true;
+          })
       );
     }
     if (!perfPlan.skip) {
@@ -212,10 +245,12 @@ async function saveDaily() {
 async function deleteDaily() {
   dailyErr.value = '';
   dailyMsg.value = '';
-  if (!confirm(`確定要刪除 ${dailyDate.value} 呢日嘅出席、表現分、堂課分記錄?呢個動作不可還原。`)) return;
+  if (!confirm(`確定要刪除 ${dailyDate.value} 呢日嘅出席(日間及夜間)、表現分、堂課分記錄?呢個動作不可還原。`)) return;
   dailySaving.value = true;
   try {
     await http.delete(`/teacher/class-subjects/${csId.value}/daily-record`, { params: { date: dailyDate.value } });
+    dayExists.value = false;
+    nightExists.value = false;
     clearMap(attendanceStatus);
     clearMap(performanceScores);
     clearMap(lessonScores);
@@ -334,20 +369,29 @@ onMounted(async () => {
           <input type="date" v-model="dailyDate" />
         </label>
         <label class="field-group">
+          <span class="label">課程</span>
+          <select v-model="sessionType">
+            <option value="day">日間課程{{ dayExists ? '(已點名)' : '' }}</option>
+            <option value="night">夜間課程(選填){{ nightExists ? '(已點名)' : '' }}</option>
+          </select>
+        </label>
+        <label class="field-group">
           <span class="label">堂數</span>
-          <select v-model="periodMode">
+          <select v-model="periodMode" :disabled="nightNotNeeded">
             <option value="single">單課</option>
             <option value="double">連續兩節</option>
           </select>
         </label>
         <div class="spacer" />
         <button class="danger" :disabled="dailySaving || dailyLoading" @click="deleteDaily">刪除呢日記錄</button>
-        <button class="primary" :disabled="dailySaving || dailyLoading" @click="saveDaily">
+        <button class="primary" :disabled="dailySaving || dailyLoading || nightNotNeeded" @click="saveDaily">
           {{ dailySaving ? '儲存中...' : '儲存全部記錄' }}
         </button>
       </div>
 
-      <div class="toolbar">
+      <div v-if="nightNotNeeded" class="success-box">呢日日間課程已經點咗名,夜間課程唔使再點名。</div>
+
+      <div v-if="!nightNotNeeded" class="toolbar">
         <span class="label" style="font-weight: 600; color: var(--text)">快速填寫:</span>
         <div class="field-group">
           <select v-model="bulkAttendanceStatus" style="min-width: 150px">
@@ -372,7 +416,7 @@ onMounted(async () => {
       <div v-if="dailyMsg" class="success-box">{{ dailyMsg }}</div>
 
       <p v-if="dailyLoading" class="muted">載入緊...</p>
-      <div v-else class="table-wrap">
+      <div v-else-if="!nightNotNeeded" class="table-wrap">
         <table>
           <thead>
             <tr>
