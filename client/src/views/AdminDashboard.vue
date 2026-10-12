@@ -157,6 +157,54 @@ async function addStudent(classId) {
   }
 }
 
+// ---- 學生轉班(連同出席/評分/測驗記錄一齊搬)----
+const transferStudentId = reactive({});
+const transferTargetClassId = reactive({});
+const transferSeatNo = reactive({});
+const transferMsg = reactive({});
+const transferErr = reactive({});
+const transferring = ref(false);
+async function transferStudent(classId) {
+  transferErr[classId] = '';
+  transferMsg[classId] = '';
+  const studentId = transferStudentId[classId];
+  const targetClassId = transferTargetClassId[classId];
+  if (!studentId || !targetClassId) {
+    transferErr[classId] = '請揀學生同目標班級';
+    return;
+  }
+  const url = `/admin/classes/${classId}/students/${studentId}/transfer`;
+  const body = { targetClassId, seatNo: transferSeatNo[classId] || undefined };
+  const student = classStudents[classId].find((s) => s.id === studentId);
+  transferring.value = true;
+  try {
+    // 先 dry run 攞轉班計劃,畀管理員睇清楚邊啲科目嘅記錄會跟住搬、邊啲搬唔到先確認
+    const { data: plan } = await http.post(url, { ...body, dryRun: true });
+    const lines = [`將「${student.name}」轉去 ${plan.targetClass}(學號 ${plan.seatNo})?`];
+    lines.push(
+      plan.moved.length
+        ? `會一齊搬過去嘅記錄:${plan.moved.map((m) => `${m.subject}(${m.records} 項)`).join('、')}`
+        : '呢個學生喺原班未有任何記錄。'
+    );
+    if (plan.unmatched.length) {
+      lines.push(
+        `⚠ 目標班級冇開以下科目,呢啲記錄搬唔到,會留喺原班(唔會刪除,但唔會再喺匯出出現):` +
+          plan.unmatched.map((m) => `${m.subject}(${m.records} 項)`).join('、')
+      );
+    }
+    if (!confirm(lines.join('\n\n'))) return;
+    const { data } = await http.post(url, body);
+    transferMsg[classId] = `已將「${student.name}」轉去 ${data.targetClass}(學號 ${data.seatNo})`;
+    transferStudentId[classId] = '';
+    transferSeatNo[classId] = '';
+    await loadClassStudents(classId);
+  } catch (e) {
+    transferErr[classId] = e.response?.data?.error || '轉班失敗';
+  } finally {
+    transferring.value = false;
+  }
+}
+
 // ---- 科目 ----
 const newSubjectName = ref('');
 const subjectErr = ref('');
@@ -347,6 +395,21 @@ async function loadRecords() {
                       <input v-model="newStudentSeatNo[c.id]" type="number" min="1" placeholder="學號(唔填自動排)" style="width: 130px" />
                       <button class="sm primary" @click="addStudent(c.id)">新增學生</button>
                       <span v-if="addStudentErr[c.id]" class="error-box" style="padding: 4px 8px">{{ addStudentErr[c.id] }}</span>
+                    </div>
+                    <div v-if="classStudents[c.id] && classStudents[c.id].length" class="row" style="margin-top: 8px">
+                      <select v-model="transferStudentId[c.id]" style="width: 140px">
+                        <option value="" disabled selected>揀要轉班嘅學生</option>
+                        <option v-for="st in classStudents[c.id]" :key="st.id" :value="st.id">{{ st.seat_no }}. {{ st.name }}</option>
+                      </select>
+                      <span class="muted">轉去</span>
+                      <select v-model="transferTargetClassId[c.id]" style="width: 120px">
+                        <option value="" disabled selected>目標班級</option>
+                        <option v-for="tc in classes.filter((x) => x.id !== c.id)" :key="tc.id" :value="tc.id">{{ tc.name }}</option>
+                      </select>
+                      <input v-model="transferSeatNo[c.id]" type="number" min="1" placeholder="新學號(唔填自動排)" style="width: 140px" />
+                      <button class="sm primary" :disabled="transferring" @click="transferStudent(c.id)">轉班(連記錄)</button>
+                      <span v-if="transferErr[c.id]" class="error-box" style="padding: 4px 8px">{{ transferErr[c.id] }}</span>
+                      <span v-if="transferMsg[c.id]" class="success-box" style="padding: 4px 8px">{{ transferMsg[c.id] }}</span>
                     </div>
                   </td>
                 </tr>

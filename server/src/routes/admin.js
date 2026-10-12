@@ -263,6 +263,136 @@ router.delete(
   })
 );
 
+// 學生轉班 —— 將學生(同一個 student id)搬去另一個班,並將佢喺原班各科嘅出席/表現分/堂課分/測驗分
+// 一齊搬去新班「同一科目」嘅指派底下:
+//   - 出席:搬入新班同日期、同日間/夜間嘅 session;新班嗰日未有 session 就照原本堂數開一個
+//   - 測驗:搬入新班同名同日期嘅測驗;冇就喺新班開一個同名同日期嘅測驗
+//   - 新班冇開嗰科嘅話,嗰科記錄搬唔到,會留喺原班個指派底下(唔會刪除),並喺結果列出嚟
+// body.dryRun = true 嘅話唔會改任何嘢,只係回傳轉班計劃,俾前端畀管理員確認
+async function studentTransferPlan(student, targetClassId) {
+  const rows = await db
+    .prepare(
+      `SELECT src.id AS src_cs_id, s.name AS subject_name, dst.id AS dst_cs_id,
+              (SELECT COUNT(*)::int FROM attendance_records ar JOIN lesson_sessions ls ON ls.id = ar.session_id
+                 WHERE ls.class_subject_id = src.id AND ar.student_id = ?)
+            + (SELECT COUNT(*)::int FROM performance_scores WHERE class_subject_id = src.id AND student_id = ?)
+            + (SELECT COUNT(*)::int FROM lesson_scores WHERE class_subject_id = src.id AND student_id = ?)
+            + (SELECT COUNT(*)::int FROM test_scores ts JOIN tests t ON t.id = ts.test_id
+                 WHERE t.class_subject_id = src.id AND ts.student_id = ?) AS record_count
+       FROM class_subjects src
+       JOIN subjects s ON s.id = src.subject_id
+       LEFT JOIN class_subjects dst ON dst.class_id = ? AND dst.subject_id = src.subject_id
+       WHERE src.class_id = ?
+       ORDER BY src.id`
+    )
+    .all(student.id, student.id, student.id, student.id, targetClassId, student.class_id);
+  const withData = rows.filter((r) => r.record_count > 0);
+  return {
+    moved: withData.filter((r) => r.dst_cs_id).map((r) => ({ subject: r.subject_name, records: r.record_count })),
+    unmatched: withData.filter((r) => !r.dst_cs_id).map((r) => ({ subject: r.subject_name, records: r.record_count })),
+    pairs: withData.filter((r) => r.dst_cs_id).map((r) => ({ src: r.src_cs_id, dst: r.dst_cs_id })),
+  };
+}
+
+router.post(
+  '/classes/:classId/students/:studentId/transfer',
+  h(async (req, res) => {
+    const student = await db
+      .prepare('SELECT * FROM students WHERE id = ? AND class_id = ? AND active = 1')
+      .get(req.params.studentId, req.params.classId);
+    if (!student) return res.status(404).json({ error: '搵唔到學生' });
+
+    const targetClassId = Number(req.body?.targetClassId);
+    const target = await db.prepare('SELECT * FROM classes WHERE id = ?').get(targetClassId);
+    if (!target) return res.status(404).json({ error: '搵唔到目標班級' });
+    if (target.id === student.class_id) return res.status(400).json({ error: '學生已經喺呢個班' });
+
+    let seatNo = req.body?.seatNo === undefined || req.body?.seatNo === '' || req.body?.seatNo === null ? null : Number(req.body.seatNo);
+    if (seatNo !== null && (!Number.isInteger(seatNo) || seatNo <= 0)) {
+      return res.status(400).json({ error: '學號必須係正整數' });
+    }
+    if (seatNo === null) {
+      // 包埋已刪除學生嘅學號一齊計,避免撞到佢哋(佢哋仲有歷史記錄,唔可以覆蓋)
+      const row = await db.prepare('SELECT COALESCE(MAX(seat_no), 0) AS m FROM students WHERE class_id = ?').get(target.id);
+      seatNo = row.m + 1;
+    } else {
+      const taken = await db.prepare('SELECT name, active FROM students WHERE class_id = ? AND seat_no = ?').get(target.id, seatNo);
+      if (taken) {
+        return res.status(409).json({
+          error: `目標班級學號 ${seatNo} 已經${taken.active ? `有學生「${taken.name}」` : '被已刪除嘅學生用咗'},請揀第二個學號或者留空自動排`,
+        });
+      }
+    }
+
+    const plan = await studentTransferPlan(student, target.id);
+    const summary = { targetClass: target.name, seatNo, moved: plan.moved, unmatched: plan.unmatched };
+    if (req.body?.dryRun) return res.json({ dryRun: true, ...summary });
+
+    const tx = db.transaction(async () => {
+      for (const { src, dst } of plan.pairs) {
+        // 出席
+        const attRows = await db
+          .prepare(
+            `SELECT ar.id, ls.date, ls.session_type, ls.period_mode
+             FROM attendance_records ar JOIN lesson_sessions ls ON ls.id = ar.session_id
+             WHERE ls.class_subject_id = ? AND ar.student_id = ?`
+          )
+          .all(src, student.id);
+        for (const r of attRows) {
+          let session = await db
+            .prepare('SELECT id FROM lesson_sessions WHERE class_subject_id = ? AND date = ? AND session_type = ?')
+            .get(dst, r.date, r.session_type);
+          if (!session) {
+            const info = await db
+              .prepare('INSERT INTO lesson_sessions (class_subject_id, date, period_mode, session_type) VALUES (?,?,?,?) RETURNING id')
+              .run(dst, r.date, r.period_mode, r.session_type);
+            session = { id: info.lastInsertRowid };
+          }
+          await db.prepare('DELETE FROM attendance_records WHERE session_id = ? AND student_id = ?').run(session.id, student.id);
+          await db.prepare('UPDATE attendance_records SET session_id = ? WHERE id = ?').run(session.id, r.id);
+        }
+
+        // 表現分 / 堂課分(新班如果已經有同一日嘅分,以原班搬過嚟嘅為準)
+        for (const table of ['performance_scores', 'lesson_scores']) {
+          await db
+            .prepare(
+              `DELETE FROM ${table} WHERE class_subject_id = ? AND student_id = ?
+                 AND date IN (SELECT date FROM ${table} WHERE class_subject_id = ? AND student_id = ?)`
+            )
+            .run(dst, student.id, src, student.id);
+          await db.prepare(`UPDATE ${table} SET class_subject_id = ? WHERE class_subject_id = ? AND student_id = ?`).run(dst, src, student.id);
+        }
+
+        // 測驗分
+        const testRows = await db
+          .prepare(
+            `SELECT ts.id, t.name, t.date, t.created_by FROM test_scores ts JOIN tests t ON t.id = ts.test_id
+             WHERE t.class_subject_id = ? AND ts.student_id = ?`
+          )
+          .all(src, student.id);
+        for (const r of testRows) {
+          let test = await db
+            .prepare('SELECT id FROM tests WHERE class_subject_id = ? AND name = ? AND date = ? ORDER BY id LIMIT 1')
+            .get(dst, r.name, r.date);
+          if (!test) {
+            const info = await db
+              .prepare('INSERT INTO tests (class_subject_id, name, date, created_by) VALUES (?,?,?,?) RETURNING id')
+              .run(dst, r.name, r.date, r.created_by);
+            test = { id: info.lastInsertRowid };
+          }
+          await db.prepare('DELETE FROM test_scores WHERE test_id = ? AND student_id = ?').run(test.id, student.id);
+          await db.prepare('UPDATE test_scores SET test_id = ? WHERE id = ?').run(test.id, r.id);
+        }
+      }
+
+      await db.prepare('UPDATE students SET class_id = ?, seat_no = ? WHERE id = ?').run(target.id, seatNo, student.id);
+    });
+    await tx();
+
+    res.json({ ok: true, ...summary });
+  })
+);
+
 // ---- 科目 ----
 router.get(
   '/subjects',
