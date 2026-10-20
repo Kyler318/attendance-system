@@ -147,7 +147,7 @@ function applyBulkAttendance() {
   for (const s of dailyRoster.value) attendanceStatus[s.id] = bulkAttendanceStatus.value;
 }
 // 套用全部表現分/堂課分嗰陣:未揀出席狀態嘅學生跳過(唔郁佢)。
-// 表現分:缺席嘅學生固定為 0。堂課分:缺席嘅學生跳過唔郁,由老師逐個決定要唔要畀分
+// 缺席嘅學生一律填 0:表現分會鎖死喺 0;堂課分就只係預設 0,老師之後仍然可以逐個改
 function applyBulkPerformance() {
   if (bulkPerformanceScore.value === null || bulkPerformanceScore.value === '') return;
   for (const s of dailyRoster.value) {
@@ -159,8 +159,7 @@ function applyBulkLesson() {
   if (bulkLessonScore.value === null || bulkLessonScore.value === '') return;
   for (const s of dailyRoster.value) {
     if (!hasAttendance(s.id)) continue;
-    if (isAbsent(s.id)) continue;
-    lessonScores[s.id] = Number(bulkLessonScore.value);
+    lessonScores[s.id] = isAbsent(s.id) ? 0 : Number(bulkLessonScore.value);
   }
 }
 
