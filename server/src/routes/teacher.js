@@ -231,6 +231,72 @@ router.delete(
   })
 );
 
+// ---- 抽籤轉盤 ----
+// 轉盤入面係嗰日有出席嘅學生(日間或者夜間任何一個唔係缺席),抽中咗嘅會記錄落 draw_records,
+// 唔會再喺嗰日個轉盤出現
+async function drawState(classSubject, date) {
+  const present = await db
+    .prepare(
+      `SELECT DISTINCT s.id, s.seat_no, s.name
+       FROM students s
+       JOIN attendance_records ar ON ar.student_id = s.id
+       JOIN lesson_sessions ls ON ls.id = ar.session_id
+       WHERE ls.class_subject_id = ? AND ls.date = ? AND ar.status <> 'absent'
+         AND s.class_id = ? AND s.active = 1
+       ORDER BY s.seat_no`
+    )
+    .all(classSubject.id, date, classSubject.class_id);
+  const records = await db
+    .prepare(
+      `SELECT dr.id, dr.student_id, dr.drawn_at, s.seat_no, s.name
+       FROM draw_records dr JOIN students s ON s.id = dr.student_id
+       WHERE dr.class_subject_id = ? AND dr.date = ?
+       ORDER BY dr.id`
+    )
+    .all(classSubject.id, date);
+  const drawn = new Set(records.map((r) => r.student_id));
+  return { present, remaining: present.filter((s) => !drawn.has(s.id)), records };
+}
+
+router.get(
+  '/class-subjects/:id/draw',
+  requireClassSubjectAccess,
+  h(async (req, res) => {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: '請提供日期' });
+    res.json(await drawState(req.classSubject, date));
+  })
+);
+
+router.post(
+  '/class-subjects/:id/draw',
+  requireClassSubjectAccess,
+  h(async (req, res) => {
+    const { date, studentId } = req.body || {};
+    if (!date || !studentId) return res.status(400).json({ error: '參數不完整' });
+    const state = await drawState(req.classSubject, date);
+    if (!state.remaining.some((s) => s.id === studentId)) {
+      return res.status(400).json({ error: '呢個學生唔喺今日個轉盤入面(未出席或者已經抽過)' });
+    }
+    await db
+      .prepare('INSERT INTO draw_records (class_subject_id, student_id, date, drawn_by) VALUES (?,?,?,?) ON CONFLICT DO NOTHING')
+      .run(req.classSubject.id, studentId, date, req.user.id);
+    res.json(await drawState(req.classSubject, date));
+  })
+);
+
+// 重置某日個轉盤:淨係刪走嗰日嘅抽籤記錄,全部出席學生放返入轉盤(唔會郁出席/評分記錄)
+router.delete(
+  '/class-subjects/:id/draw',
+  requireClassSubjectAccess,
+  h(async (req, res) => {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: '請提供日期' });
+    await db.prepare('DELETE FROM draw_records WHERE class_subject_id = ? AND date = ?').run(req.classSubject.id, date);
+    res.json(await drawState(req.classSubject, date));
+  })
+);
+
 // ---- 大測 ----
 router.get(
   '/class-subjects/:id/tests',

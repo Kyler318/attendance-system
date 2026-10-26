@@ -352,8 +352,8 @@ router.post(
           await db.prepare('UPDATE attendance_records SET session_id = ? WHERE id = ?').run(session.id, r.id);
         }
 
-        // 表現分 / 堂課分(新班如果已經有同一日嘅分,以原班搬過嚟嘅為準)
-        for (const table of ['performance_scores', 'lesson_scores']) {
+        // 表現分 / 堂課分 / 抽籤記錄(新班如果已經有同一日嘅記錄,以原班搬過嚟嘅為準)
+        for (const table of ['performance_scores', 'lesson_scores', 'draw_records']) {
           await db
             .prepare(
               `DELETE FROM ${table} WHERE class_subject_id = ? AND student_id = ?

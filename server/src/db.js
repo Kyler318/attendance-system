@@ -171,6 +171,17 @@ CREATE TABLE IF NOT EXISTS lesson_scores (
   UNIQUE(class_subject_id, student_id, date)
 );
 
+-- 抽籤轉盤記錄:每日抽中咗邊個學生回答(抽中咗就唔會再出現喺嗰日個轉盤)
+CREATE TABLE IF NOT EXISTS draw_records (
+  id SERIAL PRIMARY KEY,
+  class_subject_id INTEGER NOT NULL REFERENCES class_subjects(id) ON DELETE CASCADE,
+  student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  drawn_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  drawn_at TEXT NOT NULL DEFAULT (now()::text),
+  UNIQUE(class_subject_id, date, student_id)
+);
+
 CREATE TABLE IF NOT EXISTS tests (
   id SERIAL PRIMARY KEY,
   class_subject_id INTEGER NOT NULL REFERENCES class_subjects(id) ON DELETE CASCADE,

@@ -6,6 +6,7 @@ const routes = [
   { path: '/', name: 'home', component: () => import('../views/HomeRedirect.vue') },
   { path: '/teacher', name: 'teacher-dashboard', component: () => import('../views/TeacherDashboard.vue'), meta: { role: 'teacher' } },
   { path: '/class/:id', name: 'class-workspace', component: () => import('../views/ClassWorkspaceView.vue') },
+  { path: '/class/:id/draw', name: 'class-draw', component: () => import('../views/DrawWheelView.vue') },
   { path: '/admin', name: 'admin-dashboard', component: () => import('../views/AdminDashboard.vue'), meta: { role: 'admin' } },
   { path: '/account', name: 'account', component: () => import('../views/AccountSettingsView.vue') },
 ];

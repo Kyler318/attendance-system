@@ -391,6 +391,9 @@ onMounted(async () => {
           </select>
         </label>
         <div class="spacer" />
+        <router-link :to="{ name: 'class-draw', params: { id: csId }, query: { date: dailyDate } }">
+          <button>🎯 抽籤轉盤</button>
+        </router-link>
         <button class="danger" :disabled="dailySaving || dailyLoading" @click="deleteDaily">刪除呢日記錄</button>
         <button class="primary" :disabled="dailySaving || dailyLoading || nightNotNeeded" @click="saveDaily">
           {{ dailySaving ? '儲存中...' : '儲存全部記錄' }}
