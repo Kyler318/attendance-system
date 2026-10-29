@@ -1,6 +1,6 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router';
 import http from '../api/http';
 
 const route = useRoute();
@@ -34,6 +34,7 @@ function applyState(data, { keepWheel = false } = {}) {
 async function load() {
   err.value = '';
   winner.value = null;
+  clearPending();
   loading.value = true;
   try {
     const { data } = await http.get(`/teacher/class-subjects/${csId.value}/draw`, { params: { date: date.value } });
@@ -45,7 +46,17 @@ async function load() {
   }
 }
 
-watch(date, (d) => {
+let revertingDate = false;
+watch(date, (d, old) => {
+  if (revertingDate) {
+    revertingDate = false;
+    return;
+  }
+  if (pendingCount.value > 0 && !confirm('仲有未儲存嘅加分,轉日期會放棄呢啲加分,確定?')) {
+    revertingDate = true;
+    date.value = old;
+    return;
+  }
   router.replace({ query: { ...route.query, date: d } });
   load();
 });
@@ -123,8 +134,60 @@ function spin() {
   }, SPIN_MS + 200);
 }
 
+// ---- 答問題加表現分:撳記錄入面嘅名揀要加分嘅學生(再撳一次取消),撳「儲存」先至生效 ----
+const BONUS = 20;
+const pendingBonus = reactive({}); // { [drawRecordId]: true }
+const bonusSaving = ref(false);
+const bonusMsg = ref('');
+const pendingCount = computed(() => records.value.filter((r) => pendingBonus[r.id]).length);
+
+function clearPending() {
+  Object.keys(pendingBonus).forEach((k) => delete pendingBonus[k]);
+}
+function toggleBonus(r) {
+  if (r.bonus > 0 || bonusSaving.value) return;
+  bonusMsg.value = '';
+  if (pendingBonus[r.id]) delete pendingBonus[r.id];
+  else pendingBonus[r.id] = true;
+}
+function bonusPreview(r) {
+  return Math.min(100, (r.performance_score ?? 0) + BONUS);
+}
+async function saveBonus() {
+  const recordIds = records.value.filter((r) => pendingBonus[r.id]).map((r) => r.id);
+  if (recordIds.length === 0) return;
+  err.value = '';
+  bonusSaving.value = true;
+  try {
+    const { data } = await http.post(`/teacher/class-subjects/${csId.value}/draw/bonus`, { date: date.value, recordIds });
+    applyState(data, { keepWheel: true });
+    clearPending();
+    bonusMsg.value = `已為 ${recordIds.length} 位學生加表現分`;
+  } catch (e) {
+    err.value = e.response?.data?.error || '儲存加分失敗,請重試';
+  } finally {
+    bonusSaving.value = false;
+  }
+}
+
+// 有未儲存嘅加分就離開頁面,先提醒一下
+onBeforeRouteLeave(() => (pendingCount.value > 0 ? confirm('仲有未儲存嘅加分,確定要離開?') : true));
+function beforeUnload(e) {
+  if (pendingCount.value > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+}
+window.addEventListener('beforeunload', beforeUnload);
+
 async function resetWheel() {
-  if (!confirm(`確定要重置 ${date.value} 嘅轉盤?嗰日嘅抽籤記錄會清除,全部出席學生會放返入轉盤。(唔會影響出席同評分記錄)`)) return;
+  if (
+    !confirm(
+      `確定要重置 ${date.value} 嘅轉盤?嗰日嘅抽籤記錄會清除,全部出席學生會放返入轉盤。` +
+        '(唔會影響出席同評分記錄,已經加咗嘅表現分會保留)'
+    )
+  )
+    return;
   err.value = '';
   winner.value = null;
   try {
@@ -146,7 +209,10 @@ onMounted(async () => {
   info.value = data;
   await load();
 });
-onBeforeUnmount(() => clearTimeout(spinTimer));
+onBeforeUnmount(() => {
+  clearTimeout(spinTimer);
+  window.removeEventListener('beforeunload', beforeUnload);
+});
 </script>
 
 <template>
@@ -234,12 +300,32 @@ onBeforeUnmount(() => clearTimeout(spinTimer));
       <div class="card records-card">
         <h3 style="margin-top: 0">當日轉盤記錄</h3>
         <p v-if="records.length === 0" class="muted">今日未抽過任何學生。</p>
-        <ol v-else class="record-list">
-          <li v-for="r in records" :key="r.id">
-            <span>{{ r.seat_no }}. {{ r.name }}</span>
-            <span class="muted">{{ timeOf(r.drawn_at) }}</span>
-          </li>
-        </ol>
+        <template v-else>
+          <p class="muted" style="margin-top: 0">撳學生名字可以幫佢表現分 +{{ BONUS }}(上限 100),撳「儲存加分」先會生效。</p>
+          <ol class="record-list">
+            <li v-for="r in records" :key="r.id">
+              <button
+                class="record-btn"
+                :class="{ pending: pendingBonus[r.id], done: r.bonus > 0 }"
+                :disabled="r.bonus > 0 || bonusSaving"
+                @click="toggleBonus(r)"
+              >
+                <span class="record-name">{{ r.seat_no }}. {{ r.name }}</span>
+                <span class="muted">{{ timeOf(r.drawn_at) }}</span>
+                <span v-if="r.bonus > 0" class="tag done">已加 +{{ r.bonus }}(表現分 {{ r.performance_score }})</span>
+                <span v-else-if="pendingBonus[r.id]" class="tag pending">
+                  +{{ BONUS }} 待儲存(表現分 {{ r.performance_score ?? '未填' }} → {{ bonusPreview(r) }})
+                </span>
+              </button>
+            </li>
+          </ol>
+          <div class="row" style="margin-top: 12px">
+            <button class="primary" :disabled="pendingCount === 0 || bonusSaving" @click="saveBonus">
+              {{ bonusSaving ? '儲存中...' : `儲存加分(${pendingCount})` }}
+            </button>
+            <span v-if="bonusMsg" class="muted" style="color: var(--success)">{{ bonusMsg }}</span>
+          </div>
+        </template>
       </div>
     </div>
   </div>
@@ -311,5 +397,19 @@ onBeforeUnmount(() => clearTimeout(spinTimer));
   flex-direction: column;
   gap: 6px;
 }
-.record-list li span:first-child { font-weight: 500; margin-right: 8px; }
+.record-btn {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  text-align: left;
+  padding: 6px 10px;
+}
+.record-btn.pending { background: #fef3c7; border-color: #f59e0b; color: var(--text); }
+.record-btn.done { background: var(--success-bg); border-color: #86efac; opacity: 1; cursor: default; }
+.record-name { font-weight: 600; }
+.tag { font-size: 12px; width: 100%; }
+.tag.pending { color: #b45309; }
+.tag.done { color: var(--success); }
 </style>

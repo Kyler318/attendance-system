@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS draw_records (
   date TEXT NOT NULL,
   drawn_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   drawn_at TEXT NOT NULL DEFAULT (now()::text),
+  bonus INTEGER NOT NULL DEFAULT 0,
   UNIQUE(class_subject_id, date, student_id)
 );
 
@@ -223,6 +224,8 @@ function init() {
         "ALTER TABLE lesson_sessions ADD COLUMN IF NOT EXISTS session_type TEXT NOT NULL DEFAULT 'day' CHECK(session_type IN ('day','night'))"
       );
       await pool.query('ALTER TABLE lesson_sessions DROP CONSTRAINT IF EXISTS lesson_sessions_class_subject_id_date_key');
+      // Migration:抽籤記錄加 bonus 欄(抽中答問題後加咗幾多表現分,0 = 未加),舊記錄預設 0
+      await pool.query('ALTER TABLE draw_records ADD COLUMN IF NOT EXISTS bonus INTEGER NOT NULL DEFAULT 0');
       await pool.query(
         'CREATE UNIQUE INDEX IF NOT EXISTS lesson_sessions_cs_date_type_key ON lesson_sessions (class_subject_id, date, session_type)'
       );

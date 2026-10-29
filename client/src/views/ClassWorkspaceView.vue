@@ -78,6 +78,13 @@ function lessonLocked(studentId) {
   return !hasAttendance(studentId);
 }
 
+// 每行嘅顏色:出席(準時/遲到等)用亮綠色;缺席但有做堂(堂課分 > 0)用橙色;其他唔加色
+function rowClass(studentId) {
+  if (!hasAttendance(studentId)) return '';
+  if (!isAbsent(studentId)) return 'row-present';
+  return Number(lessonScores[studentId]) > 0 ? 'row-absent-work' : '';
+}
+
 function clearMap(map) {
   Object.keys(map).forEach((k) => delete map[k]);
 }
@@ -434,7 +441,11 @@ onMounted(async () => {
       <div v-if="dailyMsg" class="success-box">{{ dailyMsg }}</div>
 
       <p v-if="dailyLoading" class="muted">載入緊...</p>
-      <div v-else-if="!nightNotNeeded" class="table-wrap">
+      <div v-if="!dailyLoading && !nightNotNeeded" class="legend">
+        <span><i class="swatch row-present" />已點名(出席)</span>
+        <span><i class="swatch row-absent-work" />缺席但有做堂</span>
+      </div>
+      <div v-if="!dailyLoading && !nightNotNeeded" class="table-wrap">
         <table>
           <thead>
             <tr>
@@ -447,7 +458,7 @@ onMounted(async () => {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in dailyRoster" :key="s.id">
+            <tr v-for="s in dailyRoster" :key="s.id" :class="rowClass(s.id)">
               <td>{{ s.seat_no }}</td>
               <td class="name-cell">{{ s.name }}</td>
               <td>
@@ -514,3 +525,15 @@ onMounted(async () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+tbody tr.row-present td { background: #bbf7d0; }
+tbody tr.row-present td:first-child { box-shadow: inset 4px 0 0 #16a34a; }
+tbody tr.row-absent-work td { background: #fed7aa; }
+tbody tr.row-absent-work td:first-child { box-shadow: inset 4px 0 0 #ea580c; }
+.legend { display: flex; gap: 18px; font-size: 13px; color: var(--text-dim); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; }
+.swatch.row-present { background: #bbf7d0; box-shadow: inset 3px 0 0 #16a34a; }
+.swatch.row-absent-work { background: #fed7aa; box-shadow: inset 3px 0 0 #ea580c; }
+</style>

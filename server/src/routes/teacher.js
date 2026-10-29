@@ -248,8 +248,11 @@ async function drawState(classSubject, date) {
     .all(classSubject.id, date, classSubject.class_id);
   const records = await db
     .prepare(
-      `SELECT dr.id, dr.student_id, dr.drawn_at, s.seat_no, s.name
-       FROM draw_records dr JOIN students s ON s.id = dr.student_id
+      `SELECT dr.id, dr.student_id, dr.drawn_at, dr.bonus, s.seat_no, s.name, ps.score AS performance_score
+       FROM draw_records dr
+       JOIN students s ON s.id = dr.student_id
+       LEFT JOIN performance_scores ps
+         ON ps.class_subject_id = dr.class_subject_id AND ps.student_id = dr.student_id AND ps.date = dr.date
        WHERE dr.class_subject_id = ? AND dr.date = ?
        ORDER BY dr.id`
     )
@@ -281,6 +284,41 @@ router.post(
     await db
       .prepare('INSERT INTO draw_records (class_subject_id, student_id, date, drawn_by) VALUES (?,?,?,?) ON CONFLICT DO NOTHING')
       .run(req.classSubject.id, studentId, date, req.user.id);
+    res.json(await drawState(req.classSubject, date));
+  })
+);
+
+// 抽中嘅學生答完問題加表現分:每個抽籤記錄最多加一次(+20,上限 100)。
+// 嗰日未有表現分嘅學生由 0 開始加
+const DRAW_BONUS = 20;
+router.post(
+  '/class-subjects/:id/draw/bonus',
+  requireClassSubjectAccess,
+  h(async (req, res) => {
+    const { date, recordIds } = req.body || {};
+    if (!date || !Array.isArray(recordIds) || recordIds.length === 0) return res.status(400).json({ error: '參數不完整' });
+    const tx = db.transaction(async () => {
+      for (const recordId of recordIds) {
+        const rec = await db
+          .prepare('SELECT * FROM draw_records WHERE id = ? AND class_subject_id = ? AND date = ? AND bonus = 0')
+          .get(recordId, req.classSubject.id, date);
+        if (!rec) continue; // 已經加過或者唔屬於呢日,跳過
+        const cur = await db
+          .prepare('SELECT score FROM performance_scores WHERE class_subject_id = ? AND student_id = ? AND date = ?')
+          .get(req.classSubject.id, rec.student_id, date);
+        const score = Math.min(100, (cur ? cur.score : 0) + DRAW_BONUS);
+        await db
+          .prepare(
+            `INSERT INTO performance_scores (class_subject_id, student_id, date, score, updated_by, updated_at)
+             VALUES (?,?,?,?,?,now()::text)
+             ON CONFLICT(class_subject_id, student_id, date)
+             DO UPDATE SET score = excluded.score, updated_by = excluded.updated_by, updated_at = now()::text`
+          )
+          .run(req.classSubject.id, rec.student_id, date, score, req.user.id);
+        await db.prepare('UPDATE draw_records SET bonus = ? WHERE id = ?').run(DRAW_BONUS, rec.id);
+      }
+    });
+    await tx();
     res.json(await drawState(req.classSubject, date));
   })
 );
